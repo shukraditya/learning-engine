@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ATT Knowledge Tree Visualizer</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            overflow: hidden;
+        }
+
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+
+        #sidebar {
+            width: 380px;
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #334155;
+            background: #0f172a;
+        }
+
+        #sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #60a5fa;
+            margin-bottom: 8px;
+        }
+
+        #sidebar-header p {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        #file-loader {
+            padding: 15px 20px;
+            border-bottom: 1px solid #334155;
+        }
+
+        #file-loader input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 10px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn:hover {
+            background: #2563eb;
+        }
+
+        .btn-secondary {
+            background: #334155;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
+
+        #node-details {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .detail-section {
+            margin-bottom: 20px;
+        }
+
+        .detail-section h3 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #64748b;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .detail-content {
+            font-size: 13px;
+            line-height: 1.6;
+            color: #cbd5e1;
+        }
+
+        .breadcrumb {
+            font-size: 12px;
+            color: #94a3b8;
+            padding: 10px;
+            background: #0f172a;
+            border-radius: 6px;
+            border: 1px solid #334155;
+        }
+
+        .level-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .level-chapter { background: #8b5cf6; color: white; }
+        .level-section { background: #06b6d4; color: white; }
+        .level-concept { background: #10b981; color: white; }
+
+        .code-block {
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .hint-list {
+            list-style: none;
+        }
+
+        .hint-list li {
+            padding: 10px 12px;
+            background: #0f172a;
+            border-left: 3px solid #f59e0b;
+            margin-bottom: 8px;
+            border-radius: 0 6px 6px 0;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .hint-list li::before {
+            content: "💡";
+            margin-right: 8px;
+        }
+
+        #viz-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #viz-controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 8px;
+        }
+
+        #search-box {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 10;
+        }
+
+        #search-input {
+            background: #1e293b;
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            width: 240px;
+        }
+
+        #search-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        #tree-svg {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        #tree-svg:active {
+            cursor: grabbing;
+        }
+
+        .node circle {
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .node circle:hover {
+            filter: brightness(1.3);
+        }
+
+        .node text {
+            font-size: 12px;
+            fill: #e2e8f0;
+            pointer-events: none;
+        }
+
+        .link {
+            fill: none;
+            stroke: #475569;
+            stroke-width: 1.5px;
+            opacity: 0.6;
+        }
+
+        .node.selected circle {
+            stroke: #fbbf24;
+            stroke-width: 3px;
+        }
+
+        .stats-bar {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            display: flex;
+            gap: 20px;
+            font-size: 12px;
+            color: #94a3b8;
+            background: #1e293b;
+            padding: 10px 16px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .stat-value {
+            color: #60a5fa;
+            font-weight: 600;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: #1e293b;
+            padding: 12px 16px;
+            border-radius: 6px;
+            border: 1px solid #334155;
+            font-size: 12px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .legend-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #64748b;
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .tag-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .tag {
+            background: #334155;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #cbd5e1;
+        }
+
+        .difficulty-indicator {
+            display: flex;
+            gap: 4px;
+            margin-top: 8px;
+        }
+
+        .difficulty-dot {
+            width: 16px;
+            height: 8px;
+            border-radius: 2px;
+            background: #334155;
+        }
+
+        .difficulty-dot.filled {
+            background: #f59e0b;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+
+        .prereq-link {
+            color: #60a5fa;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .prereq-link:hover {
+            color: #93c5fd;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="sidebar">
+            <div id="sidebar-header">
+                <h1>🌳 Knowledge Tree</h1>
+                <p>Interactive CS textbook visualization</p>
+            </div>
+            <div id="file-loader">
+                <input type="file" id="file-input" accept=".json" multiple>
+                <button class="btn" onclick="document.getElementById('file-input').click()">
+                    📂 Load Chapter(s)
+                </button>
+                <button class="btn btn-secondary" onclick="loadDemoData()">▶ Demo</button>
+            </div>
+            <div id="node-details">
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/>
+                    </svg>
+                    <p>Click a node in the tree to view details</p>
+                    <p style="font-size: 11px; margin-top: 8px;">Or load chapter JSON files to get started</p>
+                </div>
+            </div>
+        </div>
+        <div id="viz-container">
+            <div id="viz-controls">
+                <button class="btn btn-secondary" onclick="expandAll()">Expand All</button>
+                <button class="btn btn-secondary" onclick="collapseAll()">Collapse All</button>
+                <button class="btn btn-secondary" onclick="resetZoom()">Reset View</button>
+            </div>
+            <div id="search-box">
+                <input type="text" id="search-input" placeholder="Search nodes..." onkeyup="searchNodes(this.value)">
+            </div>
+            <svg id="tree-svg"></svg>
+            <div class="stats-bar" id="stats-bar" style="display: none;">
+                <div class="stat-item">
+                    <span>Chapters:</span>
+                    <span class="stat-value" id="stat-chapters">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Sections:</span>
+                    <span class="stat-value" id="stat-sections">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Concepts:</span>
+                    <span class="stat-value" id="stat-concepts">0</span>
+                </div>
+                <div class="stat-item">
+                    <span>Exercises:</span>
+                    <span class="stat-value" id="stat-exercises">0</span>
+                </div>
+            </div>
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #8b5cf6;"></div>
+                    <span>Chapter</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #06b6d4;"></div>
+                    <span>Section</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background: #10b981;"></div>
+                    <span>Concept</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State
+        let treeData = null;
+        let root = null;
+        let svg, g, zoom;
+        let selectedNode = null;
+        let allNodes = [];
+        let nodeMap = new Map();
+
+        // Config
+        const width = window.innerWidth - 380;
+        const height = window.innerHeight;
+        const nodeRadius = { 1: 12, 2: 9, 3: 7 };
+        const nodeColors = { 1: '#8b5cf6', 2: '#06b6d4', 3: '#10b981' };
+        const levelNames = { 1: 'chapter', 2: 'section', 3: 'concept' };
+
+        // Initialize D3
+        function initViz() {
+            svg = d3.select('#tree-svg')
+                .attr('viewBox', [0, 0, width, height]);
+
+            g = svg.append('g');
+
+            zoom = d3.zoom()
+                .scaleExtent([0.1, 4])
+                .on('zoom', (event) => {
+                    g.attr('transform', event.transform);
+                });
+
+            svg.call(zoom);
+            svg.call(zoom.transform, d3.zoomIdentity.translate(100, height/2).scale(0.8));
+        }
+
+        // Build hierarchical data from flat nodes
+        function buildHierarchy(nodes) {
+            const nodeById = new Map();
+
+            // Create node objects
+            nodes.forEach(n => {
+                nodeById.set(n.id, {
+                    ...n,
+                    children: [],
+                    _children: null
+                });
+            });
+
+            // Build tree
+            let root = null;
+            nodes.forEach(n => {
+                const node = nodeById.get(n.id);
+                if (n.parent_id) {
+                    const parent = nodeById.get(n.parent_id);
+                    if (parent) {
+                        parent.children.push(node);
+                    }
+                } else {
+                    root = node;
+                }
+            });
+
+            // Sort by level and id for consistency
+            function sortChildren(node) {
+                node.children.sort((a, b) => {
+                    if (a.level !== b.level) return a.level - b.level;
+                    return a.id.localeCompare(b.id);
+                });
+                node.children.forEach(sortChildren);
+            }
+            if (root) sortChildren(root);
+
+            return root;
+        }
+
+        // Render tree
+        function renderTree(data) {
+            treeData = data;
+            root = d3.hierarchy(data);
+            root.x0 = height / 2;
+            root.y0 = 0;
+
+            // Initially collapse sections (keep chapters and concepts expanded)
+            root.descendants().forEach(d => {
+                if (d.data.level === 2 && d.children) {
+                    d._children = d.children;
+                    d.children = null;
+                }
+            });
+
+            update(root);
+            updateStats();
+        }
+
+        function update(source) {
+            const treeLayout = d3.tree().nodeSize([40, 180]);
+            const treeData = treeLayout(root);
+
+            const nodes = treeData.descendants();
+            const links = treeData.links();
+
+            // Normalize for fixed-depth
+            nodes.forEach(d => d.y = d.depth * 220);
+
+            // ****************** Nodes ******************
+            const node = g.selectAll('g.node')
+                .data(nodes, d => d.data.id);
+
+            const nodeEnter = node.enter().append('g')
+                .attr('class', 'node')
+                .attr('transform', d => `translate(${source.y0},${source.x0})`)
+                .on('click', (event, d) => {
+                    event.stopPropagation();
+                    selectNode(d);
+                });
+
+            // Node circles
+            nodeEnter.append('circle')
+                .attr('r', 1e-6)
+                .attr('fill', d => nodeColors[d.data.level])
+                .attr('stroke', '#1e293b')
+                .attr('stroke-width', 2);
+
+            // Node labels
+            nodeEnter.append('text')
+                .attr('dy', '.35em')
+                .attr('x', d => d.children || d._children ? -18 : 18)
+                .attr('text-anchor', d => d.children || d._children ? 'end' : 'start')
+                .text(d => truncateText(d.data.breadcrumb.split('>').pop().trim(), 25))
+                .style('fill-opacity', 1e-6);
+
+            // Exercise indicator dot
+            nodeEnter.filter(d => d.data.exercise_config)
+                .append('circle')
+                .attr('class', 'exercise-indicator')
+                .attr('r', 4)
+                .attr('cx', d => nodeRadius[d.data.level])
+                .attr('cy', d => -nodeRadius[d.data.level])
+                .attr('fill', '#f59e0b');
+
+            // Update
+            const nodeUpdate = node.merge(nodeEnter).transition().duration(750)
+                .attr('transform', d => `translate(${d.y},${d.x})`);
+
+            nodeUpdate.select('circle')
+                .attr('r', d => nodeRadius[d.data.level])
+                .attr('fill', d => nodeColors[d.data.level])
+                .attr('stroke', d => selectedNode?.data.id === d.data.id ? '#fbbf24' : '#1e293b')
+                .attr('stroke-width', d => selectedNode?.data.id === d.data.id ? 3 : 2);
+
+            nodeUpdate.select('text')
+                .style('fill-opacity', 1);
+
+            // Remove
+            const nodeExit = node.exit().transition().duration(750)
+                .attr('transform', d => `translate(${source.y},${source.x})`)
+                .remove();
+
+            nodeExit.select('circle').attr('r', 1e-6);
+            nodeExit.select('text').style('fill-opacity', 1e-6);
+
+            // ****************** Links ******************
+            const link = g.selectAll('path.link')
+                .data(links, d => d.target.data.id);
+
+            const linkEnter = link.enter().insert('path', 'g')
+                .attr('class', 'link')
+                .attr('d', d => {
+                    const o = { x: source.x0, y: source.y0 };
+                    return diagonal(o, o);
+                });
+
+            link.merge(linkEnter).transition().duration(750)
+                .attr('d', d => diagonal(d.source, d.target));
+
+            link.exit().transition().duration(750)
+                .attr('d', d => {
+                    const o = { x: source.x, y: source.y };
+                    return diagonal(o, o);
+                })
+                .remove();
+
+            // Store old positions
+            nodes.forEach(d => {
+                d.x0 = d.x;
+                d.y0 = d.y;
+            });
+        }
+
+        function diagonal(s, d) {
+            return `M ${s.y} ${s.x}
+                    C ${(s.y + d.y) / 2} ${s.x},
+                      ${(s.y + d.y) / 2} ${d.x},
+                      ${d.y} ${d.x}`;
+        }
+
+        function selectNode(d) {
+            // Toggle children on double-click behavior (single click for selection, click circle to toggle)
+            if (d.children) {
+                d._children = d.children;
+                d.children = null;
+            } else if (d._children) {
+                d.children = d._children;
+                d._children = null;
+            }
+
+            selectedNode = d;
+            update(d);
+            showNodeDetails(d.data);
+        }
+
+        function showNodeDetails(data) {
+            const levelName = levelNames[data.level] || 'node';
+            const levelClass = `level-${levelName}`;
+
+            let html = `
+                <div class="detail-section">
+                    <span class="level-badge ${levelClass}">${levelName}</span>
+                    <span style="float: right; font-size: 11px; color: #64748b;">ID: ${data.id}</span>
+                </div>
+                <div class="detail-section">
+                    <h3>Breadcrumb</h3>
+                    <div class="breadcrumb">${data.breadcrumb}</div>
+                </div>
+            `;
+
+            if (data.metadata) {
+                html += `
+                    <div class="detail-section">
+                        <h3>Summary</h3>
+                        <div class="detail-content">${data.metadata.summary || 'No summary'}</div>
+                    </div>
+                `;
+
+                if (data.metadata.key_terms?.length) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Key Terms (${data.metadata.key_terms.length})</h3>
+                            <div class="tag-list">
+                                ${data.metadata.key_terms.map(t => `<span class="tag">${t}</span>`).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+
+                if (data.metadata.complexity) {
+                    const dots = Array(10).fill(0).map((_, i) =>
+                        `<div class="difficulty-dot ${i < data.metadata.complexity ? 'filled' : ''}"></div>`
+                    ).join('');
+                    html += `
+                        <div class="detail-section">
+                            <h3>Complexity</h3>
+                            <div class="difficulty-indicator">${dots}</div>
+                        </div>
+                    `;
+                }
+
+                if (data.metadata.prerequisites?.length) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Prerequisites</h3>
+                            <div class="tag-list">
+                                ${data.metadata.prerequisites.map(p => {
+                                    const prereqNode = nodeMap.get(p);
+                                    return prereqNode
+                                        ? `<span class="tag prereq-link" onclick="jumpToNode('${p}')">${prereqNode.breadcrumb.split('>').pop().trim()}</span>`
+                                        : `<span class="tag">${p}</span>`;
+                                }).join('')}
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            if (data.source_page_start) {
+                html += `
+                    <div class="detail-section">
+                        <h3>Source Pages</h3>
+                        <div class="detail-content">
+                            ${data.source_page_start}${data.source_page_end ? ` - ${data.source_page_end}` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (data.content) {
+                html += `
+                    <div class="detail-section">
+                        <h3>Content Preview</h3>
+                        <div class="code-block" style="font-size: 11px; max-height: 200px; overflow-y: auto;">
+                            ${escapeHtml(truncateText(data.content, 800))}
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (data.exercise_config) {
+                const ex = data.exercise_config;
+                html += `
+                    <div class="detail-section">
+                        <h3>🎯 Exercise</h3>
+                        <div style="background: #0f172a; padding: 12px; border-radius: 6px; border: 1px solid #334155;">
+                            <div style="font-size: 12px; margin-bottom: 8px;"><strong>Objective:</strong> ${ex.objective}</div>
+                            <div style="font-size: 11px; color: #64748b;">
+                                Difficulty: ${ex.difficulty}/10 •
+                                Est. time: ${ex.estimated_time_minutes} min
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                if (ex.skeleton) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Code Skeleton</h3>
+                            <div class="code-block">${escapeHtml(ex.skeleton)}</div>
+                        </div>
+                    `;
+                }
+
+                if (ex.hints?.length) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Socratic Hints (${ex.hints.length})</h3>
+                            <ul class="hint-list">
+                                ${ex.hints.map(h => `<li>${escapeHtml(h)}</li>`).join('')}
+                            </ul>
+                        </div>
+                    `;
+                }
+
+                if (ex.test_suite) {
+                    html += `
+                        <div class="detail-section">
+                            <h3>Test Suite (Hidden)</h3>
+                            <div class="code-block" style="opacity: 0.7;">
+                                <span style="color: #64748b;"># ${ex.test_suite.split('\n').length} test cases (hidden from learner)</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            document.getElementById('node-details').innerHTML = html;
+        }
+
+        function jumpToNode(nodeId) {
+            const target = root.descendants().find(d => d.data.id === nodeId);
+            if (target) {
+                selectNode(target);
+            }
+        }
+
+        function updateStats() {
+            const nodes = root.descendants();
+            const chapters = nodes.filter(d => d.data.level === 1).length;
+            const sections = nodes.filter(d => d.data.level === 2).length;
+            const concepts = nodes.filter(d => d.data.level === 3).length;
+            const exercises = nodes.filter(d => d.data.exercise_config).length;
+
+            document.getElementById('stat-chapters').textContent = chapters;
+            document.getElementById('stat-sections').textContent = sections;
+            document.getElementById('stat-concepts').textContent = concepts;
+            document.getElementById('stat-exercises').textContent = exercises;
+            document.getElementById('stats-bar').style.display = 'flex';
+        }
+
+        // Control functions
+        function expandAll() {
+            root.descendants().forEach(d => {
+                if (d._children) {
+                    d.children = d._children;
+                    d._children = null;
+                }
+            });
+            update(root);
+        }
+
+        function collapseAll() {
+            root.descendants().forEach(d => {
+                if (d.children && d.depth > 0) {
+                    d._children = d.children;
+                    d.children = null;
+                }
+            });
+            update(root);
+        }
+
+        function resetZoom() {
+            svg.transition().duration(750).call(
+                zoom.transform,
+                d3.zoomIdentity.translate(100, height/2).scale(0.8)
+            );
+        }
+
+        function searchNodes(query) {
+            if (!query) {
+                d3.selectAll('.node circle').attr('opacity', 1);
+                return;
+            }
+
+            const lowerQuery = query.toLowerCase();
+            root.descendants().forEach(d => {
+                const match = d.data.breadcrumb.toLowerCase().includes(lowerQuery) ||
+                             d.data.id.toLowerCase().includes(lowerQuery);
+                d3.select(d3.selectAll('.node').nodes()[d.depth + root.descendants().indexOf(d)])
+                    .select('circle').attr('opacity', match ? 1 : 0.2);
+            });
+        }
+
+        // File loading
+        document.getElementById('file-input').addEventListener('change', (e) => {
+            const files = Array.from(e.target.files);
+            if (!files.length) return;
+
+            allNodes = [];
+            let loadedCount = 0;
+
+            files.forEach(file => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.nodes) {
+                            allNodes = allNodes.concat(data.nodes);
+                            data.nodes.forEach(n => nodeMap.set(n.id, n));
+                        }
+                    } catch (err) {
+                        console.error('Failed to parse:', file.name, err);
+                    }
+
+                    loadedCount++;
+                    if (loadedCount === files.length) {
+                        const hierarchy = buildHierarchy(allNodes);
+                        if (hierarchy) {
+                            renderTree(hierarchy);
+                        }
+                    }
+                };
+                reader.readAsText(file);
+            });
+        });
+
+        // Demo data
+        function loadDemoData() {
+            const demoData = {
+                nodes: [
+                    { id: 'ch01-storage-engines', level: 1, breadcrumb: 'Storage Engines', content: '# Chapter 1: Storage Engines\n\nOverview of database storage engines.', metadata: { summary: 'Introduction to storage engines', key_terms: ['storage engine', 'B-Tree', 'LSM'], complexity: 3, prerequisites: [] }, parent_id: null, source_page_start: 1, source_page_end: 45 },
+                    { id: 'ch01-storage-engines-btree-fundamentals', level: 2, breadcrumb: 'Storage Engines > B-Tree Fundamentals', content: '## B-Tree Fundamentals\n\nB-Trees are balanced search trees...', metadata: { summary: 'Understanding B-Tree structure and properties', key_terms: ['B-Tree', 'node', 'key', 'pointer'], complexity: 5, prerequisites: [] }, parent_id: 'ch01-storage-engines', source_page_start: 12 },
+                    { id: 'ch01-storage-engines-btree-fundamentals-node-structure', level: 3, breadcrumb: 'Storage Engines > B-Tree Fundamentals > Node Structure', content: '### Node Structure\n\nEach B-Tree node contains keys and pointers...', metadata: { summary: 'Internal structure of B-Tree nodes', key_terms: ['keys', 'pointers', 'fanout'], complexity: 6, prerequisites: [] }, parent_id: 'ch01-storage-engines-btree-fundamentals', source_page_start: 15, exercise_config: { objective: 'Implement a B-Tree node with key insertion', skeleton: 'class BTreeNode:\n    def __init__(self, leaf=False):\n        self.keys = []\n        self.children = []\n        self.leaf = leaf\n    \n    def insert_key(self, key):\n        # TODO: Insert key maintaining sorted order\n        pass', test_suite: 'def test_insert_key(): ...', hints: ['Consider where a new key should be placed to maintain order', 'What happens when the node exceeds capacity?'], difficulty: 6, estimated_time_minutes: 45 } },
+                    { id: 'ch01-storage-engines-btree-fundamentals-splitting', level: 3, breadcrumb: 'Storage Engines > B-Tree Fundamentals > Node Splitting', content: '### Node Splitting\n\nWhen a node overflows, it must be split...', metadata: { summary: 'How B-Trees handle node overflow through splitting', key_terms: ['split', 'median', 'promotion'], complexity: 8, prerequisites: ['ch01-storage-engines-btree-fundamentals-node-structure'] }, parent_id: 'ch01-storage-engines-btree-fundamentals', source_page_start: 22, exercise_config: { objective: 'Implement B-Tree node splitting', skeleton: 'def split_node(node):\n    # TODO: Split node and return new node\n    pass', test_suite: 'def test_split(): ...', hints: ['What key determines the split point?', 'How are children distributed between the two nodes?'], difficulty: 8, estimated_time_minutes: 60 } },
+                    { id: 'ch01-storage-engines-lsm-trees', level: 2, breadcrumb: 'Storage Engines > LSM Trees', content: '## LSM Trees\n\nLog-Structured Merge Trees...', metadata: { summary: 'Understanding LSM tree architecture', key_terms: ['LSM', 'memtable', 'SSTable', 'compaction'], complexity: 7, prerequisites: [] }, parent_id: 'ch01-storage-engines', source_page_start: 28 },
+                    { id: 'ch01-storage-engines-lsm-trees-compaction', level: 3, breadcrumb: 'Storage Engines > LSM Trees > Compaction Strategies', content: '### Compaction Strategies\n\nCompaction merges SSTables...', metadata: { summary: 'Different compaction strategies in LSM trees', key_terms: ['size-tiered', 'leveled', 'compaction'], complexity: 9, prerequisites: [] }, parent_id: 'ch01-storage-engines-lsm-trees', source_page_start: 35, exercise_config: { objective: 'Implement size-tiered compaction', skeleton: 'def compact_size_tiered(tables):\n    # TODO: Merge tables by size tier\n    pass', test_suite: 'def test_compaction(): ...', hints: ['When should tables be merged in size-tiered?', 'What size threshold triggers compaction?'], difficulty: 9, estimated_time_minutes: 90 } },
+                ]
+            };
+
+            allNodes = demoData.nodes;
+            demoData.nodes.forEach(n => nodeMap.set(n.id, n));
+            renderTree(buildHierarchy(allNodes));
+        }
+
+        // Utilities
+        function truncateText(text, maxLen) {
+            if (!text || text.length <= maxLen) return text || '';
+            return text.substring(0, maxLen) + '...';
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        // Init
+        initViz();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const newWidth = window.innerWidth - 380;
+            const newHeight = window.innerHeight;
+            svg.attr('viewBox', [0, 0, newWidth, newHeight]);
+        });
+    </script>
+</body>
+</html>
