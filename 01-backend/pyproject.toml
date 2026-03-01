@@ -20,6 +20,10 @@ dependencies = [
     "uvicorn>=0.29",
     "python-multipart>=0.0.9",
     "rich>=13.0",
+    "transformers>=4.40",
+    "torch>=2.0",
+    "accelerate>=0.28",
+    "bitsandbytes>=0.43",
 ]
 
 [project.optional-dependencies]

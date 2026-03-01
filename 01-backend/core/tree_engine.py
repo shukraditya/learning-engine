@@ -31,9 +31,7 @@ from core.node_schema import (
     SectionNode,
 )
 from services.llm_factory import LLMClient, LLMConfig
-
-if TYPE_CHECKING:
-    from docling.datamodel.document import Document
+from services.local_llm import LocalLLMWrapper
 
 
 @dataclass
@@ -716,6 +714,7 @@ class TreeEngine:
         output_dir: Path | None = None,
         cache_dir: Path | None = None,
         verbose: bool = False,
+        local_llm = None,
     ):
         """Initialize the tree engine.
 
@@ -724,13 +723,18 @@ class TreeEngine:
             output_dir: Output directory for processed books
             cache_dir: Cache directory for LLM responses
             verbose: Enable debug logging
+            local_llm: Optional local GPU LLM instance
         """
         self.verbose = verbose
         self.output_dir = output_dir or Path("03-data/vault/books/processed")
         self.cache_dir = cache_dir
+        self._local_llm = local_llm
 
         # Initialize LLM client
-        if llm_config:
+        if local_llm:
+            # Use local LLM wrapper
+            self.llm_client = LocalLLMWrapper(local_llm)
+        elif llm_config:
             self.llm_client = LLMClient(llm_config)
         else:
             from services.llm_factory import LLMFactory

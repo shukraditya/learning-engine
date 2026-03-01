@@ -142,9 +142,17 @@ def ingest(
         typer.Option(
             "--model",
             "-m",
-            help="Model name (e.g., 'gpt-4o', 'llama3:8b')",
+            help="Model name (e.g., 'gpt-4o', 'llama3:8b', 'Qwen/Qwen2.5-32B-Instruct')",
         ),
     ] = None,
+    local_gpu: Annotated[
+        bool,
+        typer.Option(
+            "--local-gpu",
+            "-g",
+            help="Use local GPU model (transformers) instead of API",
+        ),
+    ] = False,
     api_key: Annotated[
         str | None,
         typer.Option(
@@ -248,8 +256,8 @@ def ingest(
             )
             raise typer.Exit(1)
 
-    # Check Ollama availability
-    if provider == LLMProvider.OLLAMA:
+    # Check Ollama availability (only if not using local GPU)
+    if provider == LLMProvider.OLLAMA and not local_gpu:
         import urllib.request
 
         try:
@@ -271,44 +279,80 @@ def ingest(
 
     # Print header
     console.print()
-    console.print(
-        Panel(
-            f"[bold cyan]ATT Tree Decomposer[/bold cyan]\n"
-            f"Converting textbooks into interactive knowledge graphs",
-            border_style="cyan",
+    if local_gpu:
+        console.print(
+            Panel(
+                f"[bold cyan]ATT Tree Decomposer[/bold cyan]\n"
+                f"Using local GPU model: [green]{model or 'Qwen2.5-32B'}[/green]",
+                border_style="cyan",
+            )
         )
-    )
+    else:
+        console.print(
+            Panel(
+                f"[bold cyan]ATT Tree Decomposer[/bold cyan]\n"
+                f"Converting textbooks into interactive knowledge graphs",
+                border_style="cyan",
+            )
+        )
     console.print()
 
     # Configuration table
     config_table = Table(show_header=False, box=None, padding=(0, 2))
     config_table.add_row("[dim]Source:[/dim]", f"[white]{source.name}[/white]")
     config_table.add_row("[dim]Output:[/dim]", f"[white]{output_dir}[/white]")
-    config_table.add_row(
-        "[dim]Provider:[/dim]",
-        f"[green]{provider.value}[/green]" if provider == LLMProvider.OLLAMA else f"[blue]{provider.value}[/blue]",
-    )
-    config_table.add_row("[dim]Model:[/dim]", f"[white]{model}[/white]")
+    if local_gpu:
+        config_table.add_row("[dim]Provider:[/dim]", "[green]Local GPU[/green]")
+        config_table.add_row("[dim]GPU:[/dim]", f"[white]{model or 'Qwen2.5-32B'}[/white]")
+    else:
+        config_table.add_row(
+            "[dim]Provider:[/dim]",
+            f"[green]{provider.value}[/green]" if provider == LLMProvider.OLLAMA else f"[blue]{provider.value}[/blue]",
+        )
+        config_table.add_row("[dim]Model:[/dim]", f"[white]{model}[/white]")
     config_table.add_row("[dim]Max Chapters:[/dim]", f"[white]{max_chapters or 'all'}[/white]")
     config_table.add_row("[dim]Skip Exercises:[/dim]", f"[white]{'yes' if skip_exercises else 'no'}[/white]")
     console.print(config_table)
     console.print()
 
-    # Create LLM config
-    llm_config = LLMConfig(
-        provider=provider,
-        model=model,
-        temperature=temperature,
-        api_key=api_key,
-        base_url=api_base,
-    )
+    # Initialize engine (with optional local GPU)
+    if local_gpu:
+        from services.local_llm import LocalLLM, LocalLLMConfig
 
-    # Initialize engine
-    engine = TreeEngine(
-        llm_config=llm_config,
-        output_dir=output_dir,
-        verbose=verbose,
-    )
+        local_config = LocalLLMConfig(
+            model_name=model or "Qwen/Qwen2.5-32B-Instruct",
+            temperature=temperature,
+            max_tokens=4096,
+        )
+        local_llm = LocalLLM(local_config)
+        console.print(f"[dim]Loading {local_config.model_name}...[/dim]")
+        local_llm._load()  # Pre-load to show progress
+        mem = local_llm.get_gpu_memory()
+        console.print(f"[dim]GPU Memory: {mem.get('allocated_gb', 0):.1f}GB allocated[/dim]")
+        console.print()
+
+        engine = TreeEngine(
+            llm_config=None,
+            output_dir=output_dir,
+            verbose=verbose,
+            local_llm=local_llm,
+        )
+    else:
+        # Create LLM config
+        llm_config = LLMConfig(
+            provider=provider,
+            model=model,
+            temperature=temperature,
+            api_key=api_key,
+            base_url=api_base,
+        )
+
+        # Initialize engine
+        engine = TreeEngine(
+            llm_config=llm_config,
+            output_dir=output_dir,
+            verbose=verbose,
+        )
 
     # Run pipeline with progress display
     try:
@@ -727,6 +771,14 @@ def convert(
             help="Also split Markdown into chapter files",
         ),
     ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            "-f",
+            help="Overwrite existing files",
+        ),
+    ] = False,
 ) -> None:
     """Convert PDF to Markdown only (no LLM processing).
 
@@ -755,21 +807,31 @@ def convert(
     )
     console.print()
 
-    with Status("[cyan]Converting PDF with Marker...[/cyan]", console=console):
-        from core.tree_engine import DocumentProcessor
+    # Determine output path
+    if output:
+        output_path = output
+    else:
+        book_slug = source.stem.lower().replace(" ", "-")
+        output_path = Path(f"{book_slug}.md")
 
-        processor = DocumentProcessor(verbose=False)
+    # Check if already exists
+    if output_path.exists() and not force:
+        console.print(f"[yellow]⚠[/yellow] Markdown already exists: [cyan]{output_path}[/cyan]")
+        console.print(f"  [dim]Use --force to overwrite, or delete the file first[/dim]")
 
-        if output:
-            output_path = output
-        else:
-            book_slug = source.stem.lower().replace(" ", "-")
-            output_path = Path(f"{book_slug}.md")
+        # Read existing content for potential chapter splitting
+        with open(output_path, "r", encoding="utf-8") as f:
+            md_content = f.read()
+        pages_meta = {"page_count": len(md_content) // 3000 + 1}
+    else:
+        with Status("[cyan]Converting PDF with Marker...[/cyan]", console=console):
+            from core.tree_engine import DocumentProcessor
 
-        pages_meta, md_content = processor.pdf_to_markdown(source, output_path)
+            processor = DocumentProcessor(verbose=False)
+            pages_meta, md_content = processor.pdf_to_markdown(source, output_path)
 
-    console.print(f"[green]✓[/green] Converted [white]{len(document.pages)}[/white] pages")
-    console.print(f"[green]✓[/green] Markdown: [cyan]{output_path}[/cyan] ([white]{len(md_content)}[/white] chars)")
+        console.print(f"[green]✓[/green] Converted [white]{pages_meta.get('page_count', '?')}[/white] pages")
+        console.print(f"[green]✓[/green] Markdown: [cyan]{output_path}[/cyan] ([white]{len(md_content)}[/white] chars)")
 
     if split_chapters:
         console.print()
@@ -797,21 +859,320 @@ def convert(
         )
 
         chapters_dir = output_path.parent / f"{output_path.stem}-chapters"
-        chapters_dir.mkdir(parents=True, exist_ok=True)
 
-        for ch_id, ch_md in chapter_mds.items():
-            ch_path = chapters_dir / f"{ch_id}.md"
-            with open(ch_path, "w", encoding="utf-8") as f:
-                f.write(ch_md)
-
-        console.print(f"[green]✓[/green] Split into [white]{len(chapter_mds)}[/white] chapter files")
-        console.print(f"  [dim]→ {chapters_dir}[/dim]")
+        # Check if chapters already exist
+        if chapters_dir.exists() and not force:
+            existing_chapters = list(chapters_dir.glob("*.md"))
+            if existing_chapters:
+                console.print(f"[yellow]⚠[/yellow] Chapter files already exist: [cyan]{chapters_dir}[/cyan]")
+                console.print(f"  [dim]Found {len(existing_chapters)} chapter files[/dim]")
+                console.print(f"  [dim]Use --force to overwrite[/dim]")
+            else:
+                chapters_dir.mkdir(parents=True, exist_ok=True)
+                for ch_id, ch_md in chapter_mds.items():
+                    ch_path = chapters_dir / f"{ch_id}.md"
+                    with open(ch_path, "w", encoding="utf-8") as f:
+                        f.write(ch_md)
+                console.print(f"[green]✓[/green] Split into [white]{len(chapter_mds)}[/white] chapter files")
+                console.print(f"  [dim]→ {chapters_dir}[/dim]")
+        else:
+            chapters_dir.mkdir(parents=True, exist_ok=True)
+            for ch_id, ch_md in chapter_mds.items():
+                ch_path = chapters_dir / f"{ch_id}.md"
+                with open(ch_path, "w", encoding="utf-8") as f:
+                    f.write(ch_md)
+            console.print(f"[green]✓[/green] Split into [white]{len(chapter_mds)}[/white] chapter files")
+            console.print(f"  [dim]→ {chapters_dir}[/dim]")
 
     console.print()
     console.print("Next steps:")
     console.print("  [cyan]1.[/cyan] Review/edit the Markdown file")
     console.print("  [cyan]2.[/cyan] Run full pipeline: [white]python -m cli.ingest --source book.pdf[/white]")
     console.print()
+
+
+@app.command()
+def process_md(
+    source: Annotated[
+        Path,
+        typer.Argument(
+            help="Path to Markdown file to process",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            "-o",
+            help="Output directory for processed books",
+        ),
+    ] = Path("03-data/vault/books/processed"),
+    local_gpu: Annotated[
+        bool,
+        typer.Option(
+            "--local-gpu",
+            "-g",
+            help="Use local GPU model (transformers) instead of API",
+        ),
+    ] = False,
+    model: Annotated[
+        str | None,
+        typer.Option(
+            "--model",
+            "-m",
+            help="Model name (e.g., 'Qwen/Qwen2.5-32B-Instruct')",
+        ),
+    ] = None,
+    max_chapters: Annotated[
+        int | None,
+        typer.Option(
+            "--max-chapters",
+            "-n",
+            help="Limit to first N chapters (for testing)",
+            min=1,
+        ),
+    ] = None,
+    skip_exercises: Annotated[
+        bool,
+        typer.Option(
+            "--skip-exercises",
+            help="Skip exercise generation (Pass 3)",
+        ),
+    ] = False,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            help="Enable verbose debug output",
+        ),
+    ] = False,
+) -> None:
+    """Process existing Markdown file into knowledge tree.
+
+    Skips PDF conversion and uses existing Markdown.
+
+    Examples:
+        # Process existing Markdown
+        python -m cli.ingest process-md book.md
+
+        # With local GPU
+        python -m cli.ingest process-md book.md --local-gpu
+
+        # Limit chapters
+        python -m cli.ingest process-md book.md --max-chapters 3
+    """
+    setup_logging(verbose)
+
+    workspace_root = Path(__file__).parent.parent.parent
+
+    if not source.is_absolute():
+        source = workspace_root / source
+
+    if not output_dir.is_absolute():
+        output_dir = workspace_root / output_dir
+
+    console.print()
+    console.print(
+        Panel(
+            f"[bold cyan]Process Markdown → Tree[/bold cyan]\n"
+            f"Using existing Markdown file",
+            border_style="cyan",
+        )
+    )
+    console.print()
+
+    # Read Markdown
+    with open(source, "r", encoding="utf-8") as f:
+        full_md = f.read()
+
+    pages_meta = {"page_count": len(full_md) // 3000 + 1}
+
+    console.print(f"[dim]Loaded:[/dim] [white]{source}[/white] ({len(full_md)} chars, ~{pages_meta['page_count']} pages)")
+    console.print()
+
+    # Initialize engine
+    if local_gpu:
+        from services.local_llm import LocalLLM, LocalLLMConfig
+
+        local_config = LocalLLMConfig(
+            model_name=model or "Qwen/Qwen2.5-32B-Instruct",
+            temperature=0.1,
+            max_tokens=4096,
+        )
+        local_llm = LocalLLM(local_config)
+        console.print(f"[dim]Loading {local_config.model_name}...[/dim]")
+        local_llm._load()
+        mem = local_llm.get_gpu_memory()
+        console.print(f"[dim]GPU Memory: {mem.get('allocated_gb', 0):.1f}GB allocated[/dim]")
+        console.print()
+
+        engine = TreeEngine(
+            llm_config=None,
+            output_dir=output_dir,
+            verbose=verbose,
+            local_llm=local_llm,
+        )
+    else:
+        from services.llm_factory import LLMFactory
+
+        llm_config = LLMFactory.from_env()
+        engine = TreeEngine(
+            llm_config=llm_config,
+            output_dir=output_dir,
+            verbose=verbose,
+        )
+
+    # Process
+    try:
+        import asyncio
+
+        output_files = asyncio.run(
+            _process_markdown_with_progress(
+                engine=engine,
+                md_path=source,
+                full_md=full_md,
+                pages_meta=pages_meta,
+                max_chapters=max_chapters,
+                skip_exercises=skip_exercises,
+            )
+        )
+
+        console.print()
+        console.print(
+            Panel(
+                f"[bold green]✓ Processing Complete[/bold green]\n\n"
+                f"[white]{len(output_files)} chapters written[/white]",
+                border_style="green",
+            )
+        )
+
+        for f in output_files:
+            console.print(f"  [dim]→[/dim] [cyan]{f}[/cyan]")
+
+        console.print()
+        console.print("Next steps:")
+        console.print("  [cyan]1.[/cyan] Validate: [white]python -m cli.ingest validate ...[/white]")
+        console.print("  [cyan]2.[/cyan] Visualize: [white]python -m cli.ingest visualize[/white]")
+        console.print()
+
+    except Exception as e:
+        console.print()
+        console.print(
+            Panel(
+                f"[bold red]✗ Processing Failed[/bold red]\n\n[red]{e}[/red]",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(1)
+
+
+async def _process_markdown_with_progress(
+    engine: TreeEngine,
+    md_path: Path,
+    full_md: str,
+    pages_meta: dict,
+    max_chapters: int | None,
+    skip_exercises: bool,
+) -> list[Path]:
+    """Process Markdown through tree pipeline with progress."""
+
+    with ProgressManager() as pm:
+        # Phase 1: Extract structure
+        struct_task = pm.add_task("[yellow]Phase 1: Extracting book structure[/yellow]", total=1)
+
+        with Status("[cyan]Analyzing table of contents...[/cyan]", console=console):
+            book_structure = await engine.structure_agent.extract_from_markdown(
+                pages_meta, full_md
+            )
+
+        pm.update("[yellow]Phase 1: Extracting book structure[/yellow]", advance=1)
+        pm.complete("[yellow]Phase 1: Extracting book structure[/yellow]")
+        console.print(
+            f"  [dim]→ '{book_structure.title}' by {book_structure.author}, "
+            f"{len(book_structure.chapters)} chapters[/dim]"
+        )
+
+        # Limit chapters
+        chapters = book_structure.chapters
+        if max_chapters:
+            chapters = chapters[:max_chapters]
+
+        # Phase 1.5: Split
+        split_task = pm.add_task("[yellow]Phase 1.5: Splitting Markdown[/yellow]", total=1)
+        with Status("[cyan]Splitting Markdown by chapters...[/cyan]", console=console):
+            chapter_mds = engine.split_markdown_by_chapters(full_md, book_structure, pages_meta)
+        pm.update("[yellow]Phase 1.5: Splitting Markdown[/yellow]", advance=1)
+        pm.complete("[yellow]Phase 1.5: Splitting Markdown[/yellow]")
+
+        # Phase 2: Decompose
+        chap_task = pm.add_task(
+            "[yellow]Phase 2: Decomposing chapters[/yellow]",
+            total=len(chapters),
+        )
+
+        output_files: list[Path] = []
+        book_slug = engine._slugify(md_path.stem)
+
+        for idx, chapter_info in enumerate(chapters):
+            chapter_num = idx + 1
+            pm.update(
+                "[yellow]Phase 2: Decomposing chapters[/yellow]",
+                description=f"[yellow]Phase 2: Decomposing chapters[/yellow] [dim]({chapter_info.id})[/dim]",
+            )
+
+            try:
+                chapter_md = chapter_mds.get(chapter_info.id, "")
+                if not chapter_md:
+                    console.print(f"  [yellow]⚠ No Markdown for {chapter_info.id}, skipping[/yellow]")
+                    pm.update("[yellow]Phase 2: Decomposing chapters[/yellow]", advance=1)
+                    continue
+
+                # Decompose
+                chapter_structure = await engine.decomposition_agent.decompose(
+                    chapter_md=chapter_md,
+                    chapter_info=chapter_info,
+                    book_context={
+                        "title": book_structure.title,
+                        "author": book_structure.author,
+                    },
+                )
+
+                # Build tree
+                tree_builder = engine.tree_builder_class(book_slug, verbose=engine.verbose)
+                nodes = tree_builder.build_chapter_tree(chapter_structure, chapter_info)
+
+                engine.all_nodes.extend(nodes)
+                nodes = tree_builder.link_prerequisites(engine.all_nodes, chapter_num)
+
+                # Phase 3: Exercises
+                if not skip_exercises:
+                    concept_count = sum(1 for n in nodes if n.level == 3)
+                    ex_task_name = f"[yellow]Phase 3: Chapter {chapter_num} exercises[/yellow]"
+                    ex_task = pm.add_task(ex_task_name, total=concept_count)
+
+                    nodes = await _generate_exercises_with_progress(
+                        engine, nodes, chapter_md, pm, ex_task_name
+                    )
+                    pm.complete(ex_task_name)
+
+                # Write
+                writer = engine.writer_class(engine.output_dir, verbose=engine.verbose)
+                file_path = writer.write_chapter(nodes, chapter_info, book_structure)
+                output_files.append(file_path)
+
+                pm.update("[yellow]Phase 2: Decomposing chapters[/yellow]", advance=1)
+
+            except Exception as e:
+                console.print(f"  [red]✗ Chapter {chapter_info.id} failed: {e}[/red]")
+                continue
+
+        pm.complete("[yellow]Phase 2: Decomposing chapters[/yellow]")
+        return output_files
 
 
 if __name__ == "__main__":
